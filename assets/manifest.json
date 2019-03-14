@@ -1,0 +1,38 @@
+{
+  "Actions": [
+    {
+      "Icon": "images/actionIcon",
+      "Name": "Countdown Timer",
+      "States": [
+        {
+          "Image": "images/actionDefaultImage",
+          "TitleAlignment": "middle",
+          "FontSize": "16"
+        }
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Start a Timer",
+      "UUID": "com.garethhubball.plugin.action.TimerPluginAction"
+    }
+  ],
+  "Author": "",
+	"CodePathWin": "streamdeckfs.exe",
+	"CodePathMac":  "streamdeckfs",
+  "Description": "Stream Timings.",
+  "Name": "TimerDeck",
+  "Icon": "images/pluginIcon",
+  "URL": "https://www.elgato.com/gaming/stream-deck",
+  "Version": "1.0",
+  "SDKVersion": "2",
+  "OS": [
+    {
+        "Platform": "mac",
+        "MinimumVersion" : "10.11"
+    },
+    {
+        "Platform": "windows",
+        "MinimumVersion" : "10"
+    }
+  ],
+  "PropertyInspectorPath": "property-inspector/index.html"
+}
