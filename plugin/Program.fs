@@ -15,6 +15,9 @@ open Aether.Operators
 
 let task = TaskBuilder()
 
+let writeFile (filename: string) (text: string): unit =
+    System.IO.File.WriteAllText(filename, text)
+
 type Settings =
     { Minutes: Int16 option }
     static member FromJson(_: Settings): Json<Settings> = json {
@@ -94,15 +97,16 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
     receiveImpl buffer
 
 let startCountdown (minutes: int16): unit =
+    let writeTime = writeFile "C:/Snaz/TextFiles/ChronoDown.txt"
     let rec updateText (secondsRemaining: int): unit =
         if secondsRemaining > 0 then
             let minutesRemaining = secondsRemaining / 60
             let secondsInMinute = secondsRemaining % 60
             let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
-            System.IO.File.WriteAllText("C:/Snaz/TextFiles/ChronoDown.txt", text)
+            writeTime text
             Thread.Sleep(1000)
             updateText (secondsRemaining - 1)
-        else ()
+        else writeTime "Back soon"
     updateText (int minutes * 60)
 
 let handleMessage (message: Message): unit =
