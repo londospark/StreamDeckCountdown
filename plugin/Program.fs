@@ -17,7 +17,7 @@ let task = TaskBuilder()
 
 type Settings =
     { Minutes: Int16 option }
-    static member FromJson(_: Settings) = json {
+    static member FromJson(_: Settings): Json<Settings> = json {
         let settingsPrism =
             Json.Object_ >?> Map.key_ "settings"
 
@@ -47,7 +47,7 @@ type Message =
       Device: Device
       Settings: Settings }
 
-    static member FromJson (_:Message) = json {
+    static member FromJson (_:Message): Json<Message> = json {
         let! action = Json.readOrDefault "action" ""
         let! context = Json.readOrDefault "context" ""
         let! device = Json.read "device"
@@ -93,9 +93,28 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
         }
     receiveImpl buffer
 
+let startCountdown (minutes: int16): unit =
+    let rec updateText (secondsRemaining: int): unit =
+        if secondsRemaining > 0 then
+            let minutesRemaining = secondsRemaining / 60
+            let secondsInMinute = secondsRemaining % 60
+            let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
+            System.IO.File.WriteAllText("C:/Snaz/TextFiles/ChronoDown.txt", text)
+            Thread.Sleep(1000)
+            updateText (secondsRemaining - 1)
+        else ()
+    updateText (int minutes * 60)
+
+let handleMessage (message: Message): unit =
+    match message.Event with
+    | KeyUp ->
+        message.Settings.Minutes
+        |> Option.iter startCountdown 
+    | _ -> ()
+
 
 [<EntryPoint>]
-let main argv =
+let main (argv: string array): int =
     let argumentParser = ArgumentParser.Create<Arguments>(programName = "sdplugin.exe")
     let results = argumentParser.Parse argv
     // System.Diagnostics.Debugger.Launch() |> ignore
@@ -114,6 +133,9 @@ let main argv =
         while websocket.State = WebSocketState.Open do
             let! firstThing = receiveString websocket
             let parsed = toMessage firstThing
+            match parsed with
+            | Choice1Of2 p -> handleMessage p
+            | _ -> ()
             do! writer.WriteLineAsync(sprintf "%A" parsed) |> ToTaskUnit
             do! writer.FlushAsync () |> ToTaskUnit
         return ()
