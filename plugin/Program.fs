@@ -13,11 +13,6 @@ open FSharpx
 open Aether
 open Aether.Operators
 
-let task = TaskBuilder()
-
-let writeFile (filename: string) (text: string): unit =
-    System.IO.File.WriteAllText(filename, text)
-
 type Settings =
     { Minutes: Int16 option }
     static member FromJson(_: Settings): Json<Settings> = json {
@@ -43,13 +38,32 @@ type Context = Context of string
 type Device = Device of string
 type Action = Action of string
 
+let websocket = new ClientWebSocket()
+let task = TaskBuilder()
+let payload (json: string) = ReadOnlyMemory((System.Text.UTF8Encoding()).GetBytes(json))
+
+let writeFile (filename: string) (text: string): Task<unit> =
+    System.IO.File.WriteAllTextAsync(filename, text) |> ToTaskUnit
+
+let setTitle' (target: string) (Context context) (title: string) =
+    sprintf """
+{
+    "event": "setTitle",
+    "context": "%s",
+    "payload": {
+        "title": "%s",
+        "target": "%s"
+    }
+}""" context title target
+
+let setTitle = setTitle' "both"
+
 type Message =
     { Event: Event
       Context: Context
       Action: Action
       Device: Device
       Settings: Settings }
-
     static member FromJson (_:Message): Json<Message> = json {
         let! action = Json.readOrDefault "action" ""
         let! context = Json.readOrDefault "context" ""
@@ -96,24 +110,28 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
         }
     receiveImpl buffer
 
-let startCountdown (minutes: int16): unit =
+let startCountdown (minutes: int16) (context: Context): Task<unit> =
     let writeTime = writeFile "C:/Snaz/TextFiles/ChronoDown.txt"
-    let rec updateText (secondsRemaining: int): unit =
+    let rec updateText (secondsRemaining: int): Task<unit> =
         if secondsRemaining > 0 then
-            let minutesRemaining = secondsRemaining / 60
-            let secondsInMinute = secondsRemaining % 60
-            let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
-            writeTime text
-            Thread.Sleep(1000)
-            updateText (secondsRemaining - 1)
-        else writeTime "Back soon"
+            task {
+                let minutesRemaining = secondsRemaining / 60
+                let secondsInMinute = secondsRemaining % 60
+                let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
+                do! writeTime text
+                let json = setTitle context (sprintf "%i:%02i" minutesRemaining secondsInMinute)
+                do! websocket.SendAsync(payload json, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit
+                do! Task.Delay(1000) |> ToTaskUnit
+                return! updateText (secondsRemaining - 1)
+            }
+        else task { do! writeTime "Back soon" }
     updateText (int minutes * 60)
 
 let handleMessage (message: Message): unit =
     match message.Event with
     | KeyUp ->
         message.Settings.Minutes
-        |> Option.iter startCountdown 
+        |> Option.iter (fun m -> (startCountdown m message.Context).Wait())
     | _ -> ()
 
 
@@ -125,7 +143,6 @@ let main (argv: string array): int =
     System.IO.File.WriteAllText("D:/something.txt", (sprintf "%A" results))
     printfn "%A" results
 
-    let websocket = new ClientWebSocket()
     let mainTask = task {
         do! websocket.ConnectAsync(Uri(sprintf "ws://localhost:%d" (results.GetResult Port)), CancellationToken.None) |> ToTaskUnit
 
