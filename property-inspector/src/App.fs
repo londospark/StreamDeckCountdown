@@ -14,39 +14,58 @@ open Thoth.Json
 open System
 open Fable.Import
 
+type Settings = { Minutes: int }
+
+type Coordinates = { Column: int; Row: int }
+
+type Payload = {
+  Coordinates: Coordinates
+  IsInMultiAction: bool
+  Settings: Settings }
+
+type ElgatoEvent = {
+  Action: string
+  Context: string
+  Device: string
+  Event: string
+  Payload: Payload }
+
 module State =
   
   type Model = int16
 
   type Msg =
-  | Event of string
+  | Event of Result<ElgatoEvent, string>
   | UpdateSettings of Model
   | Error
 
 let mutable socket : WebSocket = null
 let mutable uuid: string = null
 
-let connectSocket(inPort, inPropertyInspectorUUID: string, inRegisterEvent, inInfo, inActionInfo) =
-  socket <- WebSocket.Create (sprintf "ws://localhost:%d" inPort)
-  Browser.console.log "Called init"
-  socket.onmessage <- (fun message ->
-    Browser.console.log message
-    message.data.ToString() |> State.Event |> Cmd.ofMsg)
-  socket.onopen <- (fun _ ->
-    let json = Encode.object [
-        "event", inRegisterEvent
-        "uuid", Encode.string inPropertyInspectorUUID
-    ]
-    uuid <- inPropertyInspectorUUID
-    Browser.console.log json
-    socket.send(Encode.toString 0 json)
-  )
+let receiveWebsocketMessages (_: State.Model) =
+  let sub dispatch =
+    Browser.console.log "Setting up websocket for receive."
+    socket.onmessage <-
+      (fun message ->
+        Browser.console.log message
+        (State.Event (Decode.Auto.fromString<ElgatoEvent>(message.data.ToString(), isCamelCase=true))) |> dispatch)
+    Browser.console.log "Finishing setting up websocket for receive."
+  Cmd.ofSub sub
 
 let sendSettings (time: int16) : unit =
   let json = Encode.object [
     "event", Encode.string "setSettings"
     "context", Encode.string uuid
     "payload", Encode.object [ "minutes", Encode.int (int time) ]
+  ]
+  socket.send(Encode.toString 0 json)
+  Browser.console.log json
+  ()
+
+let getSettings () : unit =
+  let json = Encode.object [
+    "event", Encode.string "getSettings"
+    "context", Encode.string uuid
   ]
   socket.send(Encode.toString 0 json)
   Browser.console.log json
@@ -60,15 +79,18 @@ let handleError (e: exn) : State.Msg =
 module Elmish =
   open State
 
-  let init() : Model * Cmd<_> = 2s, Cmd.attemptFunc sendSettings 2s handleError
+  let init () : Model * Cmd<_> = 2s, Cmd.none
 
   // UPDATE
 
   let update (msg: Msg) (model: Model) : Model * Cmd<_> =
       match msg with
-      | Event data ->
-        Browser.console.log(data)
-        30s, Cmd.none
+      | Event (Ok data) ->
+          Browser.console.log(data)
+          int16 data.Payload.Settings.Minutes, Cmd.none
+      | Event (Result.Error err) ->
+          Browser.console.error(err)
+          model, Cmd.none
       | UpdateSettings time -> time, Cmd.attemptFunc sendSettings time handleError
       | Error -> model, Cmd.none
 
@@ -84,13 +106,31 @@ module Elmish =
               input [ HTMLAttr.Type "range"
                       Min "2"
                       HTMLAttr.Max "60"
-                      DefaultValue model
+                      Value model
                       OnChange (fun e -> e.Value |> Int16.Parse |> State.UpdateSettings |> dispatch)]
               span [ Class "clickable"; Value "60"] [str ("60")]]]
       details [Class "message"] [ summary [] [str (sprintf "%d minutes." model) ]]]
- 
+
+let connectSocket(inPort, inPropertyInspectorUUID: string, inRegisterEvent, inInfo, inActionInfo) =
+  socket <- WebSocket.Create (sprintf "ws://localhost:%d" inPort)
+  Browser.console.log "Called init"
+  
+  socket.onopen <- (fun _ ->
+    let json = Encode.object [
+        "event", inRegisterEvent
+        "uuid", Encode.string inPropertyInspectorUUID
+    ]
+    uuid <- inPropertyInspectorUUID
+    Browser.console.log json
+    socket.send(Encode.toString 0 json)
+    getSettings ()
+  )
+
+  Program.mkProgram Elmish.init Elmish.update Elmish.view
+  |> Program.withReact "elmish-app"
+  |> Program.withSubscription receiveWebsocketMessages
+  |> Program.withConsoleTrace
+  |> Program.run
+
 // App
-Program.mkProgram Elmish.init Elmish.update Elmish.view
-|> Program.withReact "elmish-app"
-|> Program.withConsoleTrace
-|> Program.run
+
