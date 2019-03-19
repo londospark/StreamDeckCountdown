@@ -40,16 +40,19 @@ type Action = Action of string
 
 type MailboxMessage =
     | PressedButton of Context * int16
-    | CountdownCompleted
+    | CountdownCompleted of Context
 
 let websocket = new ClientWebSocket()
 let task = TaskBuilder()
 let payload (json: string) = ReadOnlyMemory((System.Text.UTF8Encoding()).GetBytes(json))
 
+let sendToHost (websocket: ClientWebSocket) (json: string): Task<unit> =
+    websocket.SendAsync(payload json, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit
+
 let writeFile (filename: string) (text: string): Task<unit> =
     System.IO.File.WriteAllTextAsync(filename, text) |> ToTaskUnit
 
-let setTitle' (target: string) (Context context) (title: string) =
+let setTitle' (target: string) (Context context) (title: string): string =
     sprintf """
 {
     "event": "setTitle",
@@ -61,6 +64,20 @@ let setTitle' (target: string) (Context context) (title: string) =
 }""" context title target
 
 let setTitle = setTitle' "both"
+
+let log (message: string): unit =
+    let json =
+        sprintf """
+        {
+            "event": "logMessage",
+            "payload": {
+                "message": "[SDFS]: %s"
+            }
+        }""" (System.Web.HttpUtility.JavaScriptStringEncode message)
+    try
+        (sendToHost websocket json).Result
+    with
+        | _ -> ()
 
 type Message =
     { Event: Event
@@ -114,11 +131,15 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
         }
     receiveImpl buffer
 
-let startCountdown (minutes: int16) (context: Context): unit =
+type CountdownState = Stopped | Running of CancellationTokenSource
+type PluginState = Map<Context, CountdownState>
+
+let startCountdownImpl (minutes: int16) (context: Context) (token: CancellationToken) (completed: Context -> Unit): unit =
     let writeTime = writeFile "C:/Snaz/TextFiles/ChronoDown.txt"
-    let rec updateText (secondsRemaining: int): Task<unit> =
+    let taskWithToken = TaskBuilderWithToken()
+    let rec updateText (secondsRemaining: int): TokenToTask<unit> =
         if secondsRemaining > 0 then
-            task {
+            taskWithToken {
                 let minutesRemaining = secondsRemaining / 60
                 let secondsInMinute = secondsRemaining % 60
                 let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
@@ -128,34 +149,55 @@ let startCountdown (minutes: int16) (context: Context): unit =
                 do! Task.Delay(1000) |> ToTaskUnit
                 return! updateText (secondsRemaining - 1)
             }
-        else task { do! writeTime "Back soon" }
-    updateText (int minutes * 60) |> ignore
+        else taskWithToken {
+                completed context
+                do! writeTime "Back soon"
+            }
+    
+    updateText (int minutes * 60) token |> ignore
 
+type Countdown (startCountdown: int16 -> Context -> CancellationToken -> (Context -> unit) -> unit) =
 
-type CountdownState = Stopped | Running
-type PluginState = Map<Context, CountdownState>
+    
 
-type Countdown() =
+    let handleCompletion (context: Context) (state: PluginState): PluginState =
+        let request = setTitle context "Done"
+        websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask().Start()
+        state |> Map.add context Stopped
 
-    let mailbox = MailboxProcessor.Start(fun inbox -> 
-        let rec loop (state: PluginState) = async {
+    let rec mailbox = MailboxProcessor.Start(fun inbox -> 
+        let rec loop (localState: PluginState) = async {
+            log (sprintf "Loop State: %A" localState)
             match! inbox.Receive() with
             | PressedButton (context, minutes) ->
-                startCountdown minutes context
-                return! loop (state |> Map.add context Running)
-            | CountdownCompleted ->
-                return! loop state
+                let state' = handleButtonPress context minutes localState
+                log (sprintf "After HBP State: %A" state')
+                return! loop state'
+            | CountdownCompleted context ->
+                return! loop (handleCompletion context localState)
         }
         loop Map.empty
-    )
-
+        )
+    and handleButtonPress (context: Context) (minutes: int16) (state: PluginState): PluginState =
+        log (sprintf "HBP State: %A" state)
+        match (state |> Map.findOrDefault context Stopped) with
+        | Running tokenSource ->
+            tokenSource.Cancel ()
+            let request = setTitle context "Stopped"
+            (websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit).Result
+            state |> Map.add context Stopped
+        | Stopped ->
+            let tokenSource = new CancellationTokenSource()
+            startCountdown minutes context tokenSource.Token (CountdownCompleted >> mailbox.Post)
+            state |> Map.add context (Running tokenSource)
+    
     member _this.PressedButton (context : Context) (minutes: int16) =
         mailbox.Post <| PressedButton (context, minutes)
 
-    member _this.CountdownCompleted () =
-        mailbox.Post CountdownCompleted
+    member _this.CountdownCompleted (context : Context) =
+        mailbox.Post <| CountdownCompleted context
 
-let countdown = Countdown()
+let countdown = Countdown(startCountdownImpl)
 
 let handleMessage (message: Message): unit =
     match message.Event with
