@@ -38,6 +38,12 @@ type Context = Context of string
 type Device = Device of string
 type Action = Action of string
 
+type MailboxMessage =
+    | StartCountdown of Context * int16
+    | Quit
+    | CountdownCompleted
+    | StopCountdown
+
 let websocket = new ClientWebSocket()
 let task = TaskBuilder()
 let payload (json: string) = ReadOnlyMemory((System.Text.UTF8Encoding()).GetBytes(json))
@@ -110,7 +116,7 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
         }
     receiveImpl buffer
 
-let startCountdown (minutes: int16) (context: Context): Task<unit> =
+let startCountdown (minutes: int16) (context: Context): unit =
     let writeTime = writeFile "C:/Snaz/TextFiles/ChronoDown.txt"
     let rec updateText (secondsRemaining: int): Task<unit> =
         if secondsRemaining > 0 then
@@ -125,13 +131,43 @@ let startCountdown (minutes: int16) (context: Context): Task<unit> =
                 return! updateText (secondsRemaining - 1)
             }
         else task { do! writeTime "Back soon" }
-    updateText (int minutes * 60)
+    updateText (int minutes * 60) |> ignore
+
+
+
+type Countdown() =
+
+    let mailbox = MailboxProcessor.Start(fun inbox -> 
+        let rec loop () = async {
+            match! inbox.Receive() with
+            | Quit -> ()
+            | StartCountdown (context, minutes) -> startCountdown minutes context 
+            | CountdownCompleted -> ()
+            | StopCountdown -> ()
+            return! loop ()
+        }
+        loop()
+    )
+
+    member _this.StartCountdown (context : Context) (minutes: int16) =
+        mailbox.Post <| StartCountdown (context, minutes)
+
+    member _this.Quit () =
+        mailbox.Post Quit
+
+    member _this.CountdownCompleted () =
+        mailbox.Post CountdownCompleted
+
+    member _this.StopCountdown () =
+        mailbox.Post StopCountdown
+
+let countdown = Countdown()
 
 let handleMessage (message: Message): unit =
     match message.Event with
     | KeyUp ->
         message.Settings.Minutes
-        |> Option.iter (fun m -> (startCountdown m message.Context).Wait())
+        |> Option.iter (fun m -> (countdown.StartCountdown message.Context m) |> ignore)
     | _ -> ()
 
 
