@@ -39,10 +39,8 @@ type Device = Device of string
 type Action = Action of string
 
 type MailboxMessage =
-    | StartCountdown of Context * int16
-    | Quit
+    | PressedButton of Context * int16
     | CountdownCompleted
-    | StopCountdown
 
 let websocket = new ClientWebSocket()
 let task = TaskBuilder()
@@ -134,32 +132,28 @@ let startCountdown (minutes: int16) (context: Context): unit =
     updateText (int minutes * 60) |> ignore
 
 
+type CountdownState = Stopped | Running
+type PluginState = Map<Context, CountdownState>
 
 type Countdown() =
 
     let mailbox = MailboxProcessor.Start(fun inbox -> 
-        let rec loop () = async {
+        let rec loop (state: PluginState) = async {
             match! inbox.Receive() with
-            | Quit -> ()
-            | StartCountdown (context, minutes) -> startCountdown minutes context 
-            | CountdownCompleted -> ()
-            | StopCountdown -> ()
-            return! loop ()
+            | PressedButton (context, minutes) ->
+                startCountdown minutes context
+                return! loop (state |> Map.add context Running)
+            | CountdownCompleted ->
+                return! loop state
         }
-        loop()
+        loop Map.empty
     )
 
-    member _this.StartCountdown (context : Context) (minutes: int16) =
-        mailbox.Post <| StartCountdown (context, minutes)
-
-    member _this.Quit () =
-        mailbox.Post Quit
+    member _this.PressedButton (context : Context) (minutes: int16) =
+        mailbox.Post <| PressedButton (context, minutes)
 
     member _this.CountdownCompleted () =
         mailbox.Post CountdownCompleted
-
-    member _this.StopCountdown () =
-        mailbox.Post StopCountdown
 
 let countdown = Countdown()
 
@@ -167,7 +161,7 @@ let handleMessage (message: Message): unit =
     match message.Event with
     | KeyUp ->
         message.Settings.Minutes
-        |> Option.iter (fun m -> (countdown.StartCountdown message.Context m) |> ignore)
+        |> Option.iter (fun m -> (countdown.PressedButton message.Context m) |> ignore)
     | _ -> ()
 
 
