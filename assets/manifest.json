@@ -10,8 +10,8 @@
           "FontSize": "16"
         }
       ],
-      "SupportedInMultiActions": false,
-      "Tooltip": "Start a Timer",
+      "SupportedInMultiActions": true,
+      "Tooltip": "Start a Countdown Timer",
       "UUID": "com.garethhubball.plugin.action.TimerPluginAction"
     }
   ],

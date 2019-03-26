@@ -14,7 +14,7 @@ open Aether
 open Aether.Operators
 
 type Settings =
-    { Minutes: Int16 option }
+    { Minutes: Int16 option; CountdownText: string option; FinishedText: string option }
     static member FromJson(_: Settings): Json<Settings> = json {
         let settingsPrism =
             Json.Object_ >?> Map.key_ "settings"
@@ -24,8 +24,24 @@ type Settings =
             Json.Object_ >?> Map.key_ "minutes" >?>
             Json.Number_
 
+        let countdownPrism =
+            settingsPrism >?>
+            Json.Object_ >?> Map.key_ "countdownText" >?>
+            Json.String_
+            
+        let finishedPrism =
+            settingsPrism >?>
+            Json.Object_ >?> Map.key_ "finishedText" >?>
+            Json.String_
+
         let! minutes = Json.Optic.tryGet minutePrism
-        return { Minutes = minutes |> Option.map (fun value -> int16 value)  }
+        let! countdownText = Json.Optic.tryGet countdownPrism
+        let! finishedText = Json.Optic.tryGet finishedPrism
+        return {
+                Minutes = minutes |> Option.map (fun value -> int16 value)
+                CountdownText = countdownText
+                FinishedText = finishedText
+            }
     }
 
 type Event = 
@@ -39,7 +55,7 @@ type Device = Device of string
 type Action = Action of string
 
 type MailboxMessage =
-    | PressedButton of Context * int16
+    | PressedButton of Context * Settings
     | CountdownCompleted of Context
 
 let websocket = new ClientWebSocket()
@@ -101,15 +117,6 @@ type Message =
     }
 
 
-type Arguments = 
-    | [<AltCommandLine("-port")>] Port of int
-    | [<AltCommandLine("-pluginUUID")>] PluginUUID of string
-    | [<AltCommandLine("-registerEvent")>] RegisterEvent of string
-    | [<AltCommandLine("-info")>] Info of String
-with
-    interface IArgParserTemplate with
-        member _this.Usage: string = 
-            "Not Implemented"
 
 let toMessage (rawJson: string) : Choice<Message, string> =
     match rawJson |> Json.tryParse with
@@ -134,7 +141,7 @@ let receiveString (websocket: ClientWebSocket) : Task<string> =
 type CountdownState = Stopped | Running of CancellationTokenSource
 type PluginState = Map<Context, CountdownState>
 
-let startCountdownImpl (minutes: int16) (context: Context) (token: CancellationToken) (completed: Context -> Unit): unit =
+let startCountdownImpl (settings: Settings) (context: Context) (token: CancellationToken) (completed: Context -> Unit): unit =
     let writeTime = writeFile "C:/Snaz/TextFiles/ChronoDown.txt"
     let taskWithToken = TaskBuilderWithToken()
     let rec updateText (secondsRemaining: int): TokenToTask<unit> =
@@ -142,31 +149,32 @@ let startCountdownImpl (minutes: int16) (context: Context) (token: CancellationT
             taskWithToken {
                 let minutesRemaining = secondsRemaining / 60
                 let secondsInMinute = secondsRemaining % 60
-                let text = (sprintf "Back in %i:%02i" minutesRemaining secondsInMinute)
+                let timeRemaining = (sprintf "%i:%02i" minutesRemaining secondsInMinute)
+                let text = sprintf "%s %s" (Option.getOrElse "Back in" settings.CountdownText) timeRemaining
                 do! writeTime text
-                let json = setTitle context (sprintf "%i:%02i" minutesRemaining secondsInMinute)
+                let json = setTitle context timeRemaining
                 do! websocket.SendAsync(payload json, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit
                 do! Task.Delay(1000) |> ToTaskUnit
                 return! updateText (secondsRemaining - 1)
             }
         else taskWithToken {
                 completed context
-                do! writeTime "Back soon"
+                do! writeTime (Option.getOrElse "Back soon" settings.FinishedText)
             }
     
-    updateText (int minutes * 60) token |> ignore
+    updateText (int settings.Minutes.Value * 60) token |> ignore
 
-type Countdown (startCountdown: int16 -> Context -> CancellationToken -> (Context -> unit) -> unit) =
+type Countdown (startCountdown: Settings -> Context -> CancellationToken -> (Context -> unit) -> unit) =
 
-    
-
-    let handleCompletion (context: Context) (state: PluginState): PluginState =
+    let handleCompletion (context: Context) (state: Task<PluginState>): Task<PluginState> = task {
         let request = setTitle context "Done"
-        websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask().Start()
-        state |> Map.add context Stopped
+        do! websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit
+        let! state' = state
+        return state' |> Map.add context Stopped
+    }
 
     let rec mailbox = MailboxProcessor.Start(fun inbox -> 
-        let rec loop (localState: PluginState) = async {
+        let rec loop (localState: Task<PluginState>) = async {
             log (sprintf "Loop State: %A" localState)
             match! inbox.Receive() with
             | PressedButton (context, minutes) ->
@@ -176,36 +184,42 @@ type Countdown (startCountdown: int16 -> Context -> CancellationToken -> (Contex
             | CountdownCompleted context ->
                 return! loop (handleCompletion context localState)
         }
-        loop Map.empty
+        loop (Task.FromResult Map.empty)
         )
-    and handleButtonPress (context: Context) (minutes: int16) (state: PluginState): PluginState =
+    and handleButtonPress (context: Context) (settings: Settings) (state: Task<PluginState>): Task<PluginState> = task {
+        let! state' = state
         log (sprintf "HBP State: %A" state)
-        match (state |> Map.findOrDefault context Stopped) with
+        match (state' |> Map.findOrDefault context Stopped) with
         | Running tokenSource ->
             tokenSource.Cancel ()
             let request = setTitle context "Stopped"
-            (websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit).Result
-            state |> Map.add context Stopped
+            do! websocket.SendAsync(payload request, WebSocketMessageType.Text, true, CancellationToken.None).AsTask() |> ToTaskUnit
+            return state' |> Map.add context Stopped
         | Stopped ->
             let tokenSource = new CancellationTokenSource()
-            startCountdown minutes context tokenSource.Token (CountdownCompleted >> mailbox.Post)
-            state |> Map.add context (Running tokenSource)
+            startCountdown settings context tokenSource.Token (CountdownCompleted >> mailbox.Post)
+            return state' |> Map.add context (Running tokenSource)
+    }
     
-    member _this.PressedButton (context : Context) (minutes: int16) =
-        mailbox.Post <| PressedButton (context, minutes)
-
-    member _this.CountdownCompleted (context : Context) =
-        mailbox.Post <| CountdownCompleted context
+    member _this.PressedButton (context : Context) (settings: Settings) =
+        mailbox.Post <| PressedButton (context, settings)
 
 let countdown = Countdown(startCountdownImpl)
 
 let handleMessage (message: Message): unit =
     match message.Event with
-    | KeyUp ->
-        message.Settings.Minutes
-        |> Option.iter (fun m -> (countdown.PressedButton message.Context m) |> ignore)
+    | KeyUp -> countdown.PressedButton message.Context message.Settings |> ignore
     | _ -> ()
 
+type Arguments = 
+    | [<AltCommandLine("-port")>] Port of int
+    | [<AltCommandLine("-pluginUUID")>] PluginUUID of string
+    | [<AltCommandLine("-registerEvent")>] RegisterEvent of string
+    | [<AltCommandLine("-info")>] Info of String
+with
+    interface IArgParserTemplate with
+        member _this.Usage: string = 
+            "Not Implemented"
 
 [<EntryPoint>]
 let main (argv: string array): int =
