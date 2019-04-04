@@ -1,0 +1,37 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.28729.10
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "streamdeckfs", "plugin\streamdeckfs.fsproj", "{FF3964DD-512C-431A-B908-1B2912EC194A}"
+EndProject
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "shared", "shared\shared.fsproj", "{A7BB402A-D856-4469-9376-E0F4F2B3D45C}"
+EndProject
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "App", "property-inspector\src\App.fsproj", "{A3C2EFBE-FEB5-42AE-9719-5BEA4F48E469}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FF3964DD-512C-431A-B908-1B2912EC194A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FF3964DD-512C-431A-B908-1B2912EC194A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FF3964DD-512C-431A-B908-1B2912EC194A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FF3964DD-512C-431A-B908-1B2912EC194A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7BB402A-D856-4469-9376-E0F4F2B3D45C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7BB402A-D856-4469-9376-E0F4F2B3D45C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7BB402A-D856-4469-9376-E0F4F2B3D45C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7BB402A-D856-4469-9376-E0F4F2B3D45C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A3C2EFBE-FEB5-42AE-9719-5BEA4F48E469}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A3C2EFBE-FEB5-42AE-9719-5BEA4F48E469}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A3C2EFBE-FEB5-42AE-9719-5BEA4F48E469}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A3C2EFBE-FEB5-42AE-9719-5BEA4F48E469}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CDB1F3B0-637B-4B08-8932-7C5E2A276BB5}
+	EndGlobalSection
+EndGlobal

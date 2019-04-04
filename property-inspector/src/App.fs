@@ -9,25 +9,14 @@ open Thoth.Json
 
 let otherwise = FSharp.Core.Option.defaultValue
 
-type Model =
-  { Minutes: int16; CountdownText: string; FinishedText: string }
-  static member Decoder: Decode.Decoder<Model> =
-    Decode.object
-      (fun get -> 
-        {
-          Minutes = int16 (get.Required.Field "minutes" Decode.int)
-          CountdownText = get.Optional.Field "countdownText" Decode.string |> otherwise ""
-          FinishedText = get.Optional.Field "finishedText" Decode.string |> otherwise ""
-        })
-
 type Payload =
-  { IsInMultiAction: bool; Settings: Model }
+  { IsInMultiAction: bool; Settings: Settings }
   static member Decoder: Decode.Decoder<Payload> =
     Decode.object
       (fun get -> 
         {
           IsInMultiAction = get.Required.Field "isInMultiAction" Decode.bool
-          Settings = get.Required.Field "settings" Model.Decoder
+          Settings = get.Required.Field "settings" Settings.Decoder
         })
 
 type ElgatoEvent =
@@ -47,7 +36,7 @@ module State =
   
   type Msg =
   | Event of Result<ElgatoEvent, string>
-  | UpdateTime of int16
+  | UpdateTime of TimeSpan
   | UpdateCountdownText of string
   | UpdateFinishedText of string
   | Error
@@ -55,7 +44,7 @@ module State =
 let mutable socket : WebSocket = null
 let mutable uuid: string = null
 
-let receiveWebsocketMessages (_: Model) =
+let receiveWebsocketMessages (_: Settings) =
   let sub dispatch =
     Browser.console.log "Setting up websocket for receive."
     socket.onmessage <-
@@ -65,14 +54,15 @@ let receiveWebsocketMessages (_: Model) =
     Browser.console.log "Finishing setting up websocket for receive."
   Cmd.ofSub sub
 
-let sendSettings (model: Model) : unit =
+let sendSettings (model: Settings) : unit =
   let json = Encode.object [
     "event", Encode.string "setSettings"
     "context", Encode.string uuid
     "payload", Encode.object [
-      "minutes", Encode.int (int model.Minutes)
-      "countdownText", Encode.string model.CountdownText
-      "finishedText", Encode.string model.FinishedText
+      //TODO(gareth): Is this not just a settings object? Should this be in shared?
+      "countdownTime", Encode.int64 (model.CountdownTime.Ticks)
+      "countdownText", Encode.string (model.CountdownText |> otherwise "")
+      "finishedText", Encode.string (model.FinishedText |> otherwise "")
     ]
   ]
   socket.send(Encode.toString 0 json)
@@ -109,11 +99,11 @@ module Elmish =
   open Fable.Helpers.React
   open Fable.Helpers.React.Props
 
-  let init () : Model * Cmd<_> = {Minutes = 2s; CountdownText = ""; FinishedText = ""}, Cmd.none
+  let init () : Settings * Cmd<_> = {CountdownTime = TimeSpan(0, 2, 30); CountdownText = None; FinishedText = None}, Cmd.none
 
   // UPDATE
 
-  let update (msg: Msg) (model: Model) : Model * Cmd<_> =
+  let update (msg: Msg) (model: Settings) : Settings * Cmd<_> =
       match msg with
       | Event (Ok data) ->
           Browser.console.log(data)
@@ -124,40 +114,47 @@ module Elmish =
           model, Cmd.none
 
       | UpdateTime time ->
-        let newModel = {model with Minutes = time}
+        let newModel = {model with CountdownTime = time}
         newModel, Cmd.attemptFunc sendSettings newModel handleError
 
       | UpdateCountdownText text ->
-        let newModel = {model with CountdownText = text}
+        let newModel = {model with CountdownText = Some text}
         newModel, Cmd.attemptFunc sendSettings newModel handleError
 
       | UpdateFinishedText text ->
-        let newModel = {model with FinishedText = text}
+        let newModel = {model with FinishedText = Some text}
         newModel, Cmd.attemptFunc sendSettings newModel handleError
 
       | Error -> model, Cmd.none
 
+
+  let toTimespan (mmss: string): TimeSpan =
+    let components = mmss.Split ':'
+    let minutes = int components.[0]
+    let seconds = int components.[1]
+    TimeSpan(0, minutes, seconds)
+
+  let fromTimespan (ts: TimeSpan): string =
+    sprintf "%02d:%02d" ts.Minutes ts.Seconds
+
   // VIEW (rendered with React)
 
-  let view (model: Model) dispatch =
+  let view (model: Settings) dispatch =
+
 
     div [ Class "sdpi-wrapper"] [
-      div [ Class "sdpi-item"; HTMLAttr.Type "range"; Id "time"]
+      
+      div [ Class "sdpi-item"; Id "time"]
           [ div [ Class "sdpi-item-label" ] [ str "Time To Wait" ]
-            div [ Class "sdpi-item-value" ] [
-              span [ Class "clickable"; Value "2"] [str ("2")]
-              input [ HTMLAttr.Type "range"
-                      Min "2"
-                      HTMLAttr.Max "60"
-                      Value model.Minutes
-                      OnChange (fun e -> e.Value |> Int16.Parse |> State.UpdateTime |> dispatch)]
-              span [ Class "clickable"; Value "60"] [str ("60")]]]
-      details [Class "message"] [ summary [] [str (sprintf "%d minutes." model.Minutes) ]]
+            input [ Type "time"
+                    Class "sdpi-item-value"
+                    OnChange (fun e -> toTimespan e.Value |> State.UpdateTime |> dispatch)
+                    Value (model.CountdownTime |> fromTimespan) ] ]
 
-      TextField "Countdown Text" "countdownText" "Text to display during the timer" model.CountdownText
+      TextField "Countdown Text" "countdownText" "Text to display during the timer" (model.CountdownText |> otherwise "")
         (fun e -> e.Value |> State.UpdateCountdownText |> dispatch)
 
-      TextField "Finished" "finishedText" "Text to display when timer finished" model.FinishedText
+      TextField "Finished" "finishedText" "Text to display when timer finished" (model.FinishedText |> otherwise "")
         (fun e -> e.Value |> State.UpdateFinishedText |> dispatch)
     ]
 
